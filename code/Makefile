@@ -1,8 +1,8 @@
 .PHONY: build build-docker clean verify setup
 
 PLUGIN_NAME    := secure-policy-plugin
-BIFROST_CORE   := v1.7.10
-GO_VERSION     := 1.26.5
+BIFROST_CORE   := v1.10.4
+GO_VERSION     := 1.27.0
 OUTPUT         := build/$(PLUGIN_NAME).so
 
 # Build via Docker (works from Mac — spins up a linux/amd64 container)
