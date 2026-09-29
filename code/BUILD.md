@@ -7,7 +7,7 @@ passing through the gateway, and logs whether the policy was injected.
 
 | Property | Old | New |
 |---|---|---|
-| bifrost/core | v1.7.10 | v1.10.4 |
+| bifrost/core | v1.7.10 | v1.10.3 |
 | Target Bifrost release | Enterprise v1.5.10 | Enterprise v2.2.3 |
 | PostLLMHook | no-op | no-op (required interface stub, does nothing) |
 | Go version | 1.26.5 | 1.27.0 |
@@ -30,7 +30,7 @@ GOAMD64     : v1
 CGO_ENABLED : 1
 buildmode   : plugin
 trimpath    : true
-bifrost/core: v1.10.4
+bifrost/core: v1.10.3
 ```
 
 ## Plugin behaviour
