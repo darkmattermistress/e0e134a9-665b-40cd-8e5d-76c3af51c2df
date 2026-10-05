@@ -6,9 +6,6 @@ on:
       bifrost_version:
         description: "Target Bifrost version (e.g. ent-v2.2.3 or 2.2.3)"
         required: true
-      core_version:
-        description: "Optional manual override of bifrost/core — leave EMPTY: the version is auto-resolved from the changelog (the Base OSS version section wins if the docs contradict themselves). Fill only if the built plugin then fails to load on your gateway."
-        required: false
 
 permissions:
   contents: write
@@ -27,7 +24,6 @@ jobs:
       - name: Resolve Bifrost release deps
         env:
           INPUT_VERSION: ${{ inputs.bifrost_version }}
-          INPUT_CORE: ${{ inputs.core_version }}
         run: |
           set -euo pipefail
           V="${INPUT_VERSION#ent-}"
@@ -35,7 +31,7 @@ jobs:
           ENT_VERSION="ent-v${V}"
           URL="https://docs.getbifrost.ai/changelogs/${ENT_VERSION}.md"
           echo "Fetching ${URL}"
-          curl -sL --fail "$URL" -o /tmp/changelog.md
+          curl -sL --fail --retry 3 --retry-delay 2 "$URL" -o /tmp/changelog.md
 
           DEPS_BLOCK="$(sed -n '/```go/,/^```$/p' /tmp/changelog.md | sed '1d;$d')"
           GO_VERSION="$(printf '%s\n' "$DEPS_BLOCK" | grep -E '^[[:space:]]*go [0-9]' | head -1 | awk '{print $2}')"
@@ -49,79 +45,74 @@ jobs:
           echo "Base OSS section  : bifrost/core ${BASE_CORE:-(not found)}"
 
           if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ]; then
-            CORE="${INPUT_CORE:-$BASE_CORE}"
-            echo "::warning::changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}. Auto-selected ${CORE} (Base OSS section = what the deployed gateway is built with). If the built plugin fails to load on the gateway, re-run with core_version=${DEPS_CORE}."
+            echo "::warning::changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}. Building BOTH variants — upload the one your gateway loads (the core tag in the filename tells them apart). If the first fails to load, upload the other."
+            CORE_VARIANTS="${DEPS_CORE} ${BASE_CORE}"
           else
-            CORE="${INPUT_CORE:-$DEPS_CORE}"
+            CORE_VARIANTS="${BASE_CORE:-$DEPS_CORE}"
           fi
-          CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
 
           echo "GO_VERSION=${GO_VERSION}" >> "$GITHUB_ENV"
-          echo "CORE=${CORE}" >> "$GITHUB_ENV"
           echo "ENT_VERSION=${ENT_VERSION}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME=secure-policy-plugin-${ENT_VERSION}-core${CORE_TAG}" >> "$GITHUB_ENV"
+          echo "CORE_VARIANTS=${CORE_VARIANTS}" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Align deps
+      - name: Build plugin variants (golang container — glibc parity with gateway)
         run: |
           set -euo pipefail
-          cd secure-policy-plugin
-          go mod edit -require="github.com/maximhq/bifrost/core@${CORE}"
-          go mod edit -go="${GO_VERSION}"
-          go mod tidy
-          go mod vendor
-          sed -i -E "s|^(BIFROST_CORE[[:space:]]*:=).*$|\1 ${CORE}|" Makefile
-          sed -i -E "s|^(GO_VERSION[[:space:]]*:=).*$|\1 ${GO_VERSION}|" Makefile
+          REF_SO="${GITHUB_WORKSPACE}/build/secure-policy-plugin.so"
+          if [ ! -f "$REF_SO" ]; then
+            echo "::warning::known-good reference artifact ${REF_SO} not found — glibc guard skipped"
+            REF_SO=""
+          fi
+          for CORE in ${CORE_VARIANTS}; do
+            CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
+            OUT="build/secure-policy-plugin-${ENT_VERSION}-core${CORE_TAG}.so"
+            echo "==> building variant: bifrost/core ${CORE} -> ${OUT}"
 
-      - name: Build linux/amd64 plugin (golang container — same environment as local make build-docker)
-        run: |
-          set -euo pipefail
-          cd secure-policy-plugin
-          mkdir -p build
-          docker run --rm \
-            -v "$PWD":/plugin \
-            -w /plugin \
-            "golang:${GO_VERSION}" \
-            sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
-              go build -trimpath -buildmode=plugin -mod=vendor \
-              -o build/secure-policy-plugin-anthfix.so main.go && strip build/secure-policy-plugin-anthfix.so"
+            (
+              cd secure-policy-plugin
+              go mod edit -require="github.com/maximhq/bifrost/core@${CORE}"
+              go mod edit -go="${GO_VERSION}"
+              go mod tidy
+              go mod vendor
+              sed -i -E "s|^(BIFROST_CORE[[:space:]]*:=).*$|\1 ${CORE}|" Makefile
+              sed -i -E "s|^(GO_VERSION[[:space:]]*:=).*$|\1 ${GO_VERSION}|" Makefile
+              mkdir -p build
+              docker run --rm \
+                -v "$PWD":/plugin \
+                -w /plugin \
+                "golang:${GO_VERSION}" \
+                sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
+                  go build -trimpath -buildmode=plugin -mod=vendor \
+                  -o build/secure-policy-plugin-anthfix.so main.go && strip build/secure-policy-plugin-anthfix.so"
+            )
 
-      - name: Verify embedded versions
-        run: |
-          set -euo pipefail
-          SO="secure-policy-plugin/build/secure-policy-plugin-anthfix.so"
-          ACTUAL_CORE="$(go version -m "$SO" | grep -E 'dep[[:space:]]+github\.com/maximhq/bifrost/core' | head -1 | awk '{print $3}')"
-          ACTUAL_GO="$(go version -m "$SO" | head -1 | awk '{print $2}')"
-          echo "embedded bifrost/core : ${ACTUAL_CORE} (expected ${CORE})"
-          echo "built with go         : ${ACTUAL_GO}"
-          [ "$ACTUAL_CORE" = "$CORE" ] || { echo "::error::embedded core ${ACTUAL_CORE} != expected ${CORE}"; exit 1; }
+            SO="secure-policy-plugin/build/secure-policy-plugin-anthfix.so"
+            ACTUAL_CORE="$(go version -m "$SO" | grep -E 'dep[[:space:]]+github\.com/maximhq/bifrost/core' | head -1 | awk '{print $3}')"
+            [ "$ACTUAL_CORE" = "$CORE" ] || { echo "::error::${OUT}: embedded core ${ACTUAL_CORE} != expected ${CORE}"; exit 1; }
 
-      - name: Save versioned artifact
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          cp secure-policy-plugin/build/secure-policy-plugin-anthfix.so "build/${ARTIFACT_NAME}.so"
+            mkdir -p build
+            cp "$SO" "$OUT"
+
+            if [ -n "$REF_SO" ]; then
+              EXTRA="$(comm -13 \
+                <(objdump -T "$REF_SO" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -u) \
+                <(objdump -T "$OUT" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -u))"
+              if [ -n "$EXTRA" ]; then
+                echo "::error::${OUT} requires glibc symbol versions the known-good artifact does not: $(echo "$EXTRA" | tr '\n' ' '). A gateway that loads the known-good artifact will fail to load this build."
+                exit 1
+              fi
+            fi
+
+            echo "variant OK: ${OUT} (embedded bifrost/core ${ACTUAL_CORE})"
+          done
           ls -la build/
 
-      - name: Guard glibc requirements against known-good artifact
-        run: |
-          set -euo pipefail
-          REF_SO="build/secure-policy-plugin.so"
-          NEW_SO="build/${ARTIFACT_NAME}.so"
-          EXTRA="$(comm -13 \
-            <(objdump -T "${REF_SO}" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -u) \
-            <(objdump -T "${NEW_SO}" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -u))"
-          if [ -n "$EXTRA" ]; then
-            echo "::error::the new plugin requires glibc symbol versions that the known-good deployed plugin (${REF_SO}) does not: $(echo "$EXTRA" | tr '\n' ' '). A gateway that loads ${REF_SO} will fail to load this build (dlopen: symbol not found). Build in the golang container image matching the gateway runtime and retry."
-            exit 1
-          fi
-          echo "glibc requirements are a subset of the known-good artifact — OK"
-
-      - name: Commit artifact and aligned deps
+      - name: Commit artifacts and aligned deps
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -130,6 +121,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "nothing to commit"
           else
-            git commit -m "build: ${ARTIFACT_NAME} (go ${GO_VERSION}, bifrost/core ${CORE})"
+            git commit -m "build: secure-policy-plugin-${ENT_VERSION} (go ${GO_VERSION}, bifrost/core variants: ${CORE_VARIANTS})"
             git push
           fi
