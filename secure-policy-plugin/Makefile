@@ -1,7 +1,7 @@
 .PHONY: build build-docker clean verify setup
 
 PLUGIN_NAME    := secure-policy-plugin-anthfix
-BIFROST_CORE   := v1.11.1
+BIFROST_CORE   := v1.10.3
 GO_VERSION     := 1.27.0
 OUTPUT         := build/$(PLUGIN_NAME).so
 
