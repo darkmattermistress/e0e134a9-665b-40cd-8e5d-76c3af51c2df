@@ -1,0 +1,113 @@
+name: Build Secure Policy Plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      bifrost_version:
+        description: "Target Bifrost version (e.g. ent-v2.2.3 or 2.2.3)"
+        required: true
+      core_version:
+        description: "bifrost/core override (e.g. v1.10.3) — required only when the changelog's plugin-deps block and its Base OSS section disagree; must match the deployed gateway"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-plugin-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Resolve Bifrost release deps
+        env:
+          INPUT_VERSION: ${{ inputs.bifrost_version }}
+          INPUT_CORE: ${{ inputs.core_version }}
+        run: |
+          set -euo pipefail
+          V="${INPUT_VERSION#ent-}"
+          V="${V#v}"
+          ENT_VERSION="ent-v${V}"
+          URL="https://docs.getbifrost.ai/changelogs/${ENT_VERSION}.md"
+          echo "Fetching ${URL}"
+          curl -sL --fail "$URL" -o /tmp/changelog.md
+
+          DEPS_BLOCK="$(sed -n '/```go/,/^```$/p' /tmp/changelog.md | sed '1d;$d')"
+          GO_VERSION="$(printf '%s\n' "$DEPS_BLOCK" | grep -E '^[[:space:]]*go [0-9]' | head -1 | awk '{print $2}')"
+          DEPS_CORE="$(printf '%s\n' "$DEPS_BLOCK" | grep -E '^[[:space:]]*github\.com/maximhq/bifrost/core[[:space:]]' | head -1 | awk '{print $2}')"
+          BASE_CORE="$(grep -A 3 'Base OSS version' /tmp/changelog.md | grep -oE 'core[[:space:]]+`v[0-9]+\.[0-9]+\.[0-9]+`' | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
+
+          [ -n "$GO_VERSION" ] || { echo "::error::could not parse go version from the changelog deps block"; exit 1; }
+          [ -n "$DEPS_CORE" ] || { echo "::error::could not parse bifrost/core from the changelog deps block"; exit 1; }
+
+          echo "plugin-deps block : go ${GO_VERSION}, bifrost/core ${DEPS_CORE}"
+          echo "Base OSS section  : bifrost/core ${BASE_CORE:-(not found)}"
+
+          if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ] && [ -z "$INPUT_CORE" ]; then
+            echo "::error::the changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}. A Go plugin only loads if its core version matches the DEPLOYED gateway binary. Check the currently loaded plugin ('go version -m <plugin>.so | grep bifrost/core') or ask the gateway team, then re-run with core_version set to that version."
+            exit 1
+          fi
+
+          CORE="${INPUT_CORE:-$DEPS_CORE}"
+          CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
+
+          echo "GO_VERSION=${GO_VERSION}" >> "$GITHUB_ENV"
+          echo "CORE=${CORE}" >> "$GITHUB_ENV"
+          echo "ENT_VERSION=${ENT_VERSION}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=secure-policy-plugin-${ENT_VERSION}-core${CORE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Align deps and build linux/amd64 plugin
+        run: |
+          set -euo pipefail
+          cd secure-policy-plugin
+          go mod edit -require="github.com/maximhq/bifrost/core@${CORE}"
+          go mod edit -go="${GO_VERSION}"
+          go mod tidy
+          go mod vendor
+          sed -i -E "s|^(BIFROST_CORE[[:space:]]*:=).*$|\1 ${CORE}|" Makefile
+          sed -i -E "s|^(GO_VERSION[[:space:]]*:=).*$|\1 ${GO_VERSION}|" Makefile
+          mkdir -p build
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOAMD64=v1 \
+            go build -trimpath -buildmode=plugin -mod=vendor \
+            -o build/secure-policy-plugin-anthfix.so main.go
+          strip build/secure-policy-plugin-anthfix.so
+
+      - name: Verify embedded versions
+        run: |
+          set -euo pipefail
+          SO="secure-policy-plugin/build/secure-policy-plugin-anthfix.so"
+          ACTUAL_CORE="$(go version -m "$SO" | grep -E 'dep[[:space:]]+github\.com/maximhq/bifrost/core' | head -1 | awk '{print $3}')"
+          ACTUAL_GO="$(go version -m "$SO" | head -1 | awk '{print $2}')"
+          echo "embedded bifrost/core : ${ACTUAL_CORE} (expected ${CORE})"
+          echo "built with go         : ${ACTUAL_GO}"
+          [ "$ACTUAL_CORE" = "$CORE" ] || { echo "::error::embedded core ${ACTUAL_CORE} != expected ${CORE}"; exit 1; }
+
+      - name: Save versioned artifact
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cp secure-policy-plugin/build/secure-policy-plugin-anthfix.so "build/${ARTIFACT_NAME}.so"
+          ls -la build/
+
+      - name: Commit artifact and aligned deps
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build/ secure-policy-plugin/go.mod secure-policy-plugin/go.sum secure-policy-plugin/Makefile
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "build: ${ARTIFACT_NAME} (go ${GO_VERSION}, bifrost/core ${CORE})"
+            git push
+          fi

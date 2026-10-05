@@ -63,20 +63,30 @@ Plugin name: `secure-policy-plugin-anthfix` (loadable alongside `secure-policy-p
 
 ## How to build
 
-> Must be built on a Linux/amd64 host (or via Docker) — CGO_ENABLED=1 requires
-> a native C toolchain for the target platform. Cross-compiling from macOS will fail.
+### CI (preferred)
+
+Run the **Build Secure Policy Plugin** workflow (Actions tab → *Run workflow*), passing the
+target Bifrost version (e.g. `ent-v2.2.3`) and — when the changelog's plugin-deps block and
+Base OSS section disagree — the `core_version` that matches the deployed gateway. The workflow
+aligns deps, builds linux/amd64, verifies the embedded versions, and commits the artifact to
+the repo `build/` folder as `secure-policy-plugin-ent-<version>-core<tag>.so`.
+
+### Local (macOS requires Docker)
 
 ```bash
 # 1. Download and vendor all dependencies (once)
 make setup
 
 # 2. Build the plugin
-make build
+make build-docker
 # Output: build/secure-policy-plugin-anthfix.so
 
 # 3. Verify embedded bifrost/core version matches
 make verify
 ```
+
+Or use the repo root `rebuild-plugin.sh --version <ent-version> [--core <vX.Y.Z>]`, which
+fetches the release deps and handles the version pinning automatically.
 
 ## Deploying to Bifrost
 
