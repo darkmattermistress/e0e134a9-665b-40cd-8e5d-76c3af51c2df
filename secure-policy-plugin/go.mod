@@ -2,7 +2,7 @@ module github.com/growwcorp/bifrost-secure-policy-plugin
 
 go 1.27.0
 
-require github.com/maximhq/bifrost/core v1.10.4
+require github.com/maximhq/bifrost/core v1.11.1
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
