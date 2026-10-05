@@ -65,11 +65,15 @@ Plugin name: `secure-policy-plugin-anthfix` (loadable alongside `secure-policy-p
 
 ### CI (preferred)
 
-Run the **Build Secure Policy Plugin** workflow (Actions tab → *Run workflow*), passing the
-target Bifrost version (e.g. `ent-v2.2.3`) and — when the changelog's plugin-deps block and
-Base OSS section disagree — the `core_version` that matches the deployed gateway. The workflow
-aligns deps, builds linux/amd64, verifies the embedded versions, and commits the artifact to
-the repo `build/` folder as `secure-policy-plugin-ent-<version>-core<tag>.so`.
+Run the **Build Secure Policy Plugin** workflow (Actions tab → *Run workflow*), passing only the
+target Bifrost version (e.g. `ent-v2.2.3`). The core version is auto-resolved from the changelog
+— if the changelog's plugin-deps block and its Base OSS section disagree, the Base OSS section
+(what the deployed gateway is built with) wins, and the run logs a warning with both values.
+`core_version` is a manual override escape hatch, only for the rare case where the auto-selected
+build then fails to load on the gateway. The workflow aligns deps, builds in the golang container
+(glibc parity with the gateway), guards glibc requirements against the known-good artifact,
+verifies embedded versions, and commits the artifact to the repo `build/` folder as
+`secure-policy-plugin-ent-<version>-core<tag>.so`.
 
 ### Local (macOS requires Docker)
 

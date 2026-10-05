@@ -17,10 +17,11 @@ Options:
                     (changelog URL: ${DOCS_BASE}/<v>)
   --url <url>       Full changelog URL (anchors allowed; host must be
                     ${DOCS_HOST})
-  --core <version>  bifrost/core version to build against. Required when the
-                    changelog's plugin-deps block and its Base OSS version
-                    section disagree (e.g. ent-v2.2.3: deps block says
-                    v1.10.4, Base OSS section says v1.10.3).
+  --core <version>  Optional manual override of the bifrost/core version.
+                    Leave it out: the version is auto-resolved from the
+                    changelog (the Base OSS version section wins if the docs
+                    contradict themselves). Use only if the built plugin
+                    then fails to load on the gateway.
   --dir <path>      Plugin source dir (default: <repo>/secure-policy-plugin)
   --name <name>     Output artifact base name (default: PLUGIN_NAME from
                     Makefile + -core<tag>, e.g. secure-policy-plugin-anthfix-core1103)
@@ -100,27 +101,16 @@ else
   info "changelog Base OSS section  : (not found)"
 fi
 
-if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ] && [ -z "$CORE_OVERRIDE" ]; then
-  cat >&2 <<EOF
-ERROR: the changelog contradicts itself:
-  plugin-deps block says bifrost/core ${DEPS_CORE}
-  Base OSS version section says bifrost/core ${BASE_CORE}
-
-A Go plugin only loads if its core version matches the DEPLOYED gateway
-binary, not the docs. Verify which one your gateway actually runs (the .so
-currently loaded on it, or the gateway team), then re-run with:
-  --core ${DEPS_CORE}   (if the gateway was built per the plugin-deps block)
-  --core ${BASE_CORE}   (if the gateway matches the Base OSS version)
-
-Hint: 'go version -m <deployed-plugin>.so | grep bifrost/core' shows the core
-version of a plugin that is known to load on the current gateway.
-EOF
-  exit 1
+if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ]; then
+  CORE="${CORE_OVERRIDE:-$BASE_CORE}"
+  echo "WARNING: the changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}." >&2
+  echo "         Auto-selected ${CORE} (Base OSS section = what the deployed gateway is built with)." >&2
+  echo "         If the built plugin fails to load, re-run with --core ${DEPS_CORE}." >&2
+else
+  CORE="${CORE_OVERRIDE:-$DEPS_CORE}"
 fi
-
-CORE="${CORE_OVERRIDE:-$DEPS_CORE}"
-if [ -n "$CORE_OVERRIDE" ] && [ "$CORE_OVERRIDE" != "$DEPS_CORE" ]; then
-  info "using --core override: ${CORE} (changelog deps block said ${DEPS_CORE})"
+if [ -n "$CORE_OVERRIDE" ]; then
+  info "using --core override: ${CORE}"
 fi
 
 MAKEFILE_PLUGIN_NAME="$(grep -E '^PLUGIN_NAME' "${PLUGIN_DIR}/Makefile" | head -1 | awk '{print $3}')"

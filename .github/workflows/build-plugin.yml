@@ -7,7 +7,7 @@ on:
         description: "Target Bifrost version (e.g. ent-v2.2.3 or 2.2.3)"
         required: true
       core_version:
-        description: "bifrost/core override (e.g. v1.10.3) — required only when the changelog's plugin-deps block and its Base OSS section disagree; must match the deployed gateway"
+        description: "Optional manual override of bifrost/core — leave EMPTY: the version is auto-resolved from the changelog (the Base OSS version section wins if the docs contradict themselves). Fill only if the built plugin then fails to load on your gateway."
         required: false
 
 permissions:
@@ -48,12 +48,12 @@ jobs:
           echo "plugin-deps block : go ${GO_VERSION}, bifrost/core ${DEPS_CORE}"
           echo "Base OSS section  : bifrost/core ${BASE_CORE:-(not found)}"
 
-          if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ] && [ -z "$INPUT_CORE" ]; then
-            echo "::error::the changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}. A Go plugin only loads if its core version matches the DEPLOYED gateway binary. Check the currently loaded plugin ('go version -m <plugin>.so | grep bifrost/core') or ask the gateway team, then re-run with core_version set to that version."
-            exit 1
+          if [ -n "$BASE_CORE" ] && [ "$DEPS_CORE" != "$BASE_CORE" ]; then
+            CORE="${INPUT_CORE:-$BASE_CORE}"
+            echo "::warning::changelog contradicts itself: plugin-deps block says ${DEPS_CORE}, Base OSS section says ${BASE_CORE}. Auto-selected ${CORE} (Base OSS section = what the deployed gateway is built with). If the built plugin fails to load on the gateway, re-run with core_version=${DEPS_CORE}."
+          else
+            CORE="${INPUT_CORE:-$DEPS_CORE}"
           fi
-
-          CORE="${INPUT_CORE:-$DEPS_CORE}"
           CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
 
           echo "GO_VERSION=${GO_VERSION}" >> "$GITHUB_ENV"
