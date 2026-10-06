@@ -133,10 +133,19 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
+if [ -n "$VERSION" ]; then
+  EV="${VERSION#ent-}"
+  EV="${EV#v}"
+  ENT_VERSION="ent-v${EV}"
+else
+  ENT_VERSION="$(basename "${URL%%.md}")"
+fi
+
 info "aligning deps in ${PLUGIN_DIR} (go mod edit/tidy/vendor)"
 ORIGINAL_MODULE="$(grep -E '^module ' "${PLUGIN_DIR}/go.mod" | awk '{print $2}')"
 BUILD_STAMP="$(date -u +%Y%m%d%H%M%S)"
 VARIANT_MODULE="${ORIGINAL_MODULE}/${ENT_VERSION:-local}-core${CORE_TAG}-${BUILD_STAMP}"
+NAME_STAMP="${MAKEFILE_PLUGIN_NAME}-${ENT_VERSION:-local}-core${CORE_TAG}-${BUILD_STAMP}"
 (
   cd "${PLUGIN_DIR}"
   go mod edit -module "${VARIANT_MODULE}"
@@ -151,7 +160,8 @@ sed -i '' -E "s|^(GO_VERSION[[:space:]]*:=).*$|\1 ${GO_VERSION}|" "${PLUGIN_DIR}
 
 command -v docker >/dev/null || die "docker not found (required for linux/amd64 build)"
 info "building linux/amd64 plugin via Docker (golang:${GO_VERSION})"
-info "module identity: ${VARIANT_MODULE} (unique per build — always loadable alongside any plugin already loaded)"
+info "module identity: ${VARIANT_MODULE} (unique per build)"
+info "plugin name    : ${NAME_STAMP} (unique per build — Bifrost keys plugin status by GetName())"
 mkdir -p "${PLUGIN_DIR}/build"
 docker run --rm \
   --platform linux/amd64 \
@@ -160,6 +170,7 @@ docker run --rm \
   "golang:${GO_VERSION}" \
   sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
     go build -trimpath -buildmode=plugin -mod=vendor \
+    -ldflags \"-X main.pluginName=${NAME_STAMP}\" \
     -o build/${OUT}.so . && strip build/${OUT}.so" \
   || die "docker build failed"
 

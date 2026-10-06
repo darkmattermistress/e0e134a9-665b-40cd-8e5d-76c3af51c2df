@@ -1,5 +1,6 @@
-// build: 20261004
+// build: 20261006
 // variant: anth-fix (guaranteed leading system placement, instructions channel, committed pre-request + per-attempt re-injection)
+// identity: pluginName is stamped per build via -ldflags (rebuild-plugin.sh / CI workflow) so a fresh build never collides with an already-loaded plugin
 package main
 
 import (
@@ -138,8 +139,10 @@ Security wins over speed, features, and convenience.`
 
 const policyMarker = "# Secure Code Generation Policy (Language-Agnostic)"
 
+var pluginName = "secure-policy-plugin-anthfix"
+
 func Init(_ any) error { return nil }
-func GetName() string  { return "secure-policy-plugin-anthfix" }
+func GetName() string  { return pluginName }
 func Cleanup() error   { return nil }
 
 func PreRequestHook(ctx *schemas.BifrostContext, req *schemas.BifrostRequest) error {

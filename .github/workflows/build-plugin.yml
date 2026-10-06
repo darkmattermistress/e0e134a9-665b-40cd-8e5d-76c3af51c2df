@@ -74,8 +74,10 @@ jobs:
             CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
             OUT="build/secure-policy-plugin-${ENT_VERSION}-core${CORE_TAG}.so"
             VARIANT_MODULE="${ORIGINAL_MODULE}/${ENT_VERSION}-core${CORE_TAG}-${BUILD_STAMP}"
+            NAME_STAMP="secure-policy-plugin-anthfix-${ENT_VERSION}-core${CORE_TAG}-${BUILD_STAMP}"
             echo "==> building variant: bifrost/core ${CORE} -> ${OUT}"
-            echo "    module identity: ${VARIANT_MODULE} (unique per build — always loadable alongside any plugin already loaded)"
+            echo "    module identity: ${VARIANT_MODULE} (unique per build)"
+            echo "    plugin name    : ${NAME_STAMP} (unique per build — Bifrost keys plugin status by GetName())"
 
             (
               cd secure-policy-plugin
@@ -93,6 +95,7 @@ jobs:
                 "golang:${GO_VERSION}" \
                 sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
                   go build -trimpath -buildmode=plugin -mod=vendor \
+                  -ldflags \"-X main.pluginName=${NAME_STAMP}\" \
                   -o build/secure-policy-plugin-anthfix.so . && strip build/secure-policy-plugin-anthfix.so"
             )
 
