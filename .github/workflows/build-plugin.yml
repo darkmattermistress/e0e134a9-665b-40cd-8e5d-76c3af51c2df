@@ -68,13 +68,18 @@ jobs:
             echo "::warning::known-good reference artifact ${REF_SO} not found — glibc guard skipped"
             REF_SO=""
           fi
+          ORIGINAL_MODULE="$(grep -E '^module ' secure-policy-plugin/go.mod | awk '{print $2}')"
+          BUILD_STAMP="${GITHUB_RUN_NUMBER:-$(date +%Y%m%d%H%M%S)}"
           for CORE in ${CORE_VARIANTS}; do
             CORE_TAG="$(printf '%s' "$CORE" | tr -d 'v.')"
             OUT="build/secure-policy-plugin-${ENT_VERSION}-core${CORE_TAG}.so"
+            VARIANT_MODULE="${ORIGINAL_MODULE}/${ENT_VERSION}-core${CORE_TAG}-${BUILD_STAMP}"
             echo "==> building variant: bifrost/core ${CORE} -> ${OUT}"
+            echo "    module identity: ${VARIANT_MODULE} (unique per build — always loadable alongside any plugin already loaded)"
 
             (
               cd secure-policy-plugin
+              go mod edit -module "${VARIANT_MODULE}"
               go mod edit -require="github.com/maximhq/bifrost/core@${CORE}"
               go mod edit -go="${GO_VERSION}"
               go mod tidy
@@ -88,12 +93,14 @@ jobs:
                 "golang:${GO_VERSION}" \
                 sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
                   go build -trimpath -buildmode=plugin -mod=vendor \
-                  -o build/secure-policy-plugin-anthfix.so main.go && strip build/secure-policy-plugin-anthfix.so"
+                  -o build/secure-policy-plugin-anthfix.so . && strip build/secure-policy-plugin-anthfix.so"
             )
 
             SO="secure-policy-plugin/build/secure-policy-plugin-anthfix.so"
             ACTUAL_CORE="$(go version -m "$SO" | grep -E 'dep[[:space:]]+github\.com/maximhq/bifrost/core' | head -1 | awk '{print $3}')"
             [ "$ACTUAL_CORE" = "$CORE" ] || { echo "::error::${OUT}: embedded core ${ACTUAL_CORE} != expected ${CORE}"; exit 1; }
+            ACTUAL_PATH="$(go version -m "$SO" | grep -E '^	path' | awk '{print $2}')"
+            [ "$ACTUAL_PATH" = "$VARIANT_MODULE" ] || { echo "::error::${OUT}: embedded module path '${ACTUAL_PATH}' != expected '${VARIANT_MODULE}'"; exit 1; }
 
             mkdir -p build
             cp "$SO" "$OUT"
@@ -108,8 +115,15 @@ jobs:
               fi
             fi
 
-            echo "variant OK: ${OUT} (embedded bifrost/core ${ACTUAL_CORE})"
+            echo "variant OK: ${OUT} (embedded bifrost/core ${ACTUAL_CORE}, module ${VARIANT_MODULE})"
           done
+
+          (
+            cd secure-policy-plugin
+            go mod edit -module "${ORIGINAL_MODULE}"
+            go mod tidy
+            go mod vendor
+          )
           ls -la build/
 
       - name: Commit artifacts and aligned deps

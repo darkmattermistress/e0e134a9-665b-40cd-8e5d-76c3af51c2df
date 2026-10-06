@@ -134,8 +134,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 info "aligning deps in ${PLUGIN_DIR} (go mod edit/tidy/vendor)"
+ORIGINAL_MODULE="$(grep -E '^module ' "${PLUGIN_DIR}/go.mod" | awk '{print $2}')"
+BUILD_STAMP="$(date -u +%Y%m%d%H%M%S)"
+VARIANT_MODULE="${ORIGINAL_MODULE}/${ENT_VERSION:-local}-core${CORE_TAG}-${BUILD_STAMP}"
 (
   cd "${PLUGIN_DIR}"
+  go mod edit -module "${VARIANT_MODULE}"
   go mod edit -require="github.com/maximhq/bifrost/core@${CORE}"
   go mod edit -go="${GO_VERSION}"
   go mod tidy
@@ -147,6 +151,7 @@ sed -i '' -E "s|^(GO_VERSION[[:space:]]*:=).*$|\1 ${GO_VERSION}|" "${PLUGIN_DIR}
 
 command -v docker >/dev/null || die "docker not found (required for linux/amd64 build)"
 info "building linux/amd64 plugin via Docker (golang:${GO_VERSION})"
+info "module identity: ${VARIANT_MODULE} (unique per build — always loadable alongside any plugin already loaded)"
 mkdir -p "${PLUGIN_DIR}/build"
 docker run --rm \
   --platform linux/amd64 \
@@ -155,15 +160,25 @@ docker run --rm \
   "golang:${GO_VERSION}" \
   sh -c "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 GOAMD64=v1 \
     go build -trimpath -buildmode=plugin -mod=vendor \
-    -o build/${OUT}.so main.go && strip build/${OUT}.so" \
+    -o build/${OUT}.so . && strip build/${OUT}.so" \
   || die "docker build failed"
+
+(
+  cd "${PLUGIN_DIR}"
+  go mod edit -module "${ORIGINAL_MODULE}"
+  go mod tidy
+  go mod vendor
+) || die "failed to restore canonical module in ${PLUGIN_DIR}/go.mod"
 
 info "verifying embedded versions"
 ACTUAL_CORE="$(go version -m "$ARTIFACT" | grep -E 'dep[[:space:]]+github\.com/maximhq/bifrost/core' | head -1 | awk '{print $3}')"
 BUILT_GO="$(go version -m "$ARTIFACT" | head -1 | awk '{print $2}')"
+ACTUAL_PATH="$(go version -m "$ARTIFACT" | grep -E '^	path' | awk '{print $2}')"
 [ "$ACTUAL_CORE" = "$CORE" ] || die "embedded core ${ACTUAL_CORE} != expected ${CORE}"
+[ "$ACTUAL_PATH" = "$VARIANT_MODULE" ] || die "embedded module path '${ACTUAL_PATH}' != expected '${VARIANT_MODULE}'"
 echo "  built with   : ${BUILT_GO}"
 echo "  bifrost/core : ${ACTUAL_CORE}"
+echo "  module path  : ${ACTUAL_PATH}"
 
 if [ -n "$REF" ]; then
   [ -f "$REF" ] || die "reference .so not found: ${REF}"
