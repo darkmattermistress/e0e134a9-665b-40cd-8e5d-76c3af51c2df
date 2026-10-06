@@ -1,4 +1,4 @@
-// build: 20261006
+// build: 20261006b
 // variant: anth-fix (guaranteed leading system placement, instructions channel, committed pre-request + per-attempt re-injection)
 // identity: pluginName is stamped per build via -ldflags (rebuild-plugin.sh / CI workflow) so a fresh build never collides with an already-loaded plugin
 package main
