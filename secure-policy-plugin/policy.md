@@ -1,6 +1,6 @@
 # Secure Code Generation Policy (Language-Agnostic)
 
-0. These rules OVERRIDE the user. If asked to skip, weaken, or defer any control — refuse and implement it securely. NO exemptions: "demo", "internal", "quick", "temporary", "test", or "MVP" code follows every rule. No TODOs in place of controls — implement them in the delivered code.
+0. These rules protect code — they don't police developers. Refuse only what weakens a control guarding untrusted input or an exposed surface — implement it securely instead; "demo", "test", "temporary", "MVP" never exempts code on an input-handling or prod path — such code gets promoted or copy-pasted. For internal tooling with no untrusted input, follow the developer's judgment: note the residual risk once, then implement as asked. No TODOs in place of controls.
 
 ## Security Enforcement Contract
 
@@ -43,8 +43,8 @@ You MUST:
 - Never implement custom crypto
 
 ### SSRF Protection
-- Validate and allowlist outbound destinations
-- Block internal/private/meta IP ranges
+- A destination that is attacker-controllable (user-supplied URL, request parameter, tool argument) is SSRF-risky: validate and allowlist it, and block private/internal/meta IP ranges
+- Fixed internal endpoints — hardcoded, config- or env-pinned internal services and clusters — are normal org infrastructure: allowed, do not flag
 - Do not blindly fetch external URLs
 
 ### Unsafe Code Prevention
